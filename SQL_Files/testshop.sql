@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS `orders` (
   `idUser` int(11) NOT NULL,
   `cityAddres` int(11) DEFAULT NULL,
   `zipCode` int(11) DEFAULT NULL,
-  `sum` decimal(7,2) NOT NULL,
+  `sum` decimal(10,2) NOT NULL,
   `reg_date` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `executed_date` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`idOrder`),
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS `products` (
   `name` varchar(60) NOT NULL,
   `description` text,
   `quantity` int(11) NOT NULL,
-  `price` decimal(6,2) NOT NULL,
+  `price` decimal(9,2) NOT NULL,
   `barcode` varchar(20) DEFAULT NULL,
   PRIMARY KEY (`idProduct`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 AUTO_INCREMENT=1 ;
