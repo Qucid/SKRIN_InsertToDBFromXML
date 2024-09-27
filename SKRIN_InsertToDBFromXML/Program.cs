@@ -8,6 +8,7 @@ using System.Xml;
 using Google.Protobuf.WellKnownTypes;
 using Mysqlx.Crud;
 using System;
+using System.Transactions;
 
 class Program
 {
@@ -46,33 +47,18 @@ class Program
     }
     class Order
     {
-        public Order() 
+        public Order(int idOrder, DateTime? reg_date, decimal? sum)
         {
-            products = new List<Product>();
+            this.idOrder = idOrder;
+            this.reg_date = reg_date;
+            this.sum = sum;
             user = new User();
         }
 
         public int idOrder { get; set; }
-        public DateTime reg_date { get; set; }
+        public DateTime? reg_date { get; set; }
         public Decimal? sum { get; set; }
-        public List<Product> products { get; set; }
         public User user { get; set; }
-
-        public void ThrowExceptionIfNull()
-        {
-            if (idOrder == null)
-            {
-                throw new CorruptedXMLException("Doesn't found node \"no\". Probably corrupted XML");
-            }
-            else if (reg_date == null)
-            {
-                throw new CorruptedXMLException("Doesn't found node \"reg_date\". Probably corrupted XML");
-            }
-            else if (sum == null)
-            {
-                throw new CorruptedXMLException("Doesn't found node \"sum\". Probably corrupted XML");
-            }
-        }
 
     }
     class User
@@ -106,273 +92,356 @@ class Program
     }
     class Product
     { 
-        public Product() { } 
-        public int? quantity { get; set; }
-        public decimal? price { get; set; }
-        public string? name { get; set; }
-        public void ThrowExceptionIfNull()
+        public Product(int idOrder, int quantity, decimal price, string name) 
         {
-            if (quantity == null)
-            {
-                throw new CorruptedXMLException("Doesn't found node \"quantity\". Probably corrupted XML");
-            }
-            else if (price == null)
-            {
-                throw new CorruptedXMLException("Doesn't found node \"price\". Probably corrupted XML");
-            }
-            else if (name == null)
-            {
-                throw new CorruptedXMLException("Doesn't found node \"name\". Probably corrupted XML");
-            }
-        }
+            this.idOrder = idOrder;
+            this.quantity = quantity;
+            this.price = price;
+            this.name = name;
+        } 
+        public int quantity { get; set; }
+        public decimal price { get; set; }
+        public string name { get; set; }
+        public int idOrder { get; set; }
     }
 
-    private static void XmlToDatabase(MySqlConnection mySqlConnection, string xmlFilename)
+    class DB : IDisposable
     {
-        List<Order> orders = new List<Order>();
-        using (XmlReader reader = XmlReader.Create(xmlFilename))
+        string? connectionString;
+        MySqlConnection connection;
+        public DB() 
         {
-            reader.MoveToContent();
-            while (reader.Read())
-            {
-                if (reader.NodeType == XmlNodeType.Element && reader.Name == "order")
-                {
-                    Order xmlOrder = new Order();
-                    int idOrder = 0;
-                    DateTime reg_date;
-                    Decimal sum = 0;
-                    while (reader.Read())
-                    {
-                        if (reader.NodeType == XmlNodeType.Element && reader.Name == "no")
-                            xmlOrder.idOrder = reader.ReadElementContentAsInt();
-                        if(reader.NodeType == XmlNodeType.Element && reader.Name == "reg_date")
-                            xmlOrder.reg_date = DateTime.Parse(reader.ReadElementContentAsString().Replace('.','-'));
-                        if (reader.NodeType == XmlNodeType.Element && reader.Name == "sum")
-                            xmlOrder.sum = reader.ReadElementContentAsDecimal();
-                        if (reader.NodeType == XmlNodeType.Element && reader.Name == "product")
-                            break;
-                    }
-                    xmlOrder.ThrowExceptionIfNull();
-                    do
-                    {
-                        if(reader.NodeType == XmlNodeType.Element && reader.Name == "product")
-                        {
-                            Product product = new Product();
-                            while (reader.Read())
-                            {
-                                if (reader.NodeType == XmlNodeType.Element && reader.Name == "quantity")
-                                    product.quantity = reader.ReadElementContentAsInt();
-                                if (reader.NodeType == XmlNodeType.Element && reader.Name == "name")
-                                    product.name = reader.ReadElementContentAsString();
-                                if (reader.NodeType == XmlNodeType.Element && reader.Name == "price")
-                                    product.price = reader.ReadElementContentAsDecimal();
-                                if (reader.NodeType == XmlNodeType.EndElement && reader.Name == "product")
-                                {
-                                    xmlOrder.products.Add(product);
-                                    product.ThrowExceptionIfNull();
-                                }
-                                if (reader.NodeType == XmlNodeType.Element && reader.Name == "product")
-                                    product = new Product();
-                                if (reader.NodeType == XmlNodeType.Element && reader.Name == "user")
-                                    break;
-                            }
-                            
-                            
-                            
-                        }
-                        if (reader.NodeType == XmlNodeType.Element && reader.Name == "user")
-                        {
-                            while (reader.Read())
-                            {
-                                if (reader.NodeType == XmlNodeType.Element && reader.Name == "fio")
-                                    xmlOrder.user.fio = reader.ReadElementContentAsString();
-                                if (reader.NodeType == XmlNodeType.Element && reader.Name == "email")
-                                    xmlOrder.user.email = reader.ReadElementContentAsString();
-                                if (reader.NodeType == XmlNodeType.EndElement && reader.Name == "user")
-                                    break;
-                            }
-                        }
-
-                        if (reader.NodeType == XmlNodeType.EndElement && reader.Name == "order")
-                            break;
-                    }
-                    while (reader.Read());
-                    orders.Add(xmlOrder);
-                }
-            }
+            string? connectionString = GetConnectionStringByName("DB");
+            if (connectionString == null)
+                throw new ConfigurationErrorsException("Connection string is null!");
+            connection = new MySqlConnection(connectionString);
         }
 
-        foreach(var o in orders)
+        public DB(string? connectionString, MySqlConnection connection)
         {
-            if (IsOrderExistById(o.idOrder, mySqlConnection))
+            if (connectionString == null)
+                throw new ConfigurationErrorsException("Connection string is null!");
+            this.connectionString = connectionString;
+            this.connection = connection;
+        }
+
+
+
+        /// <summary>
+        /// Return -1 if doesn't exist
+        /// </summary>
+        /// <param name="productName"></param>
+        /// <returns></returns>
+        public int FindIdByNameProduct(string productName)
+        {
+            int idProduct = -1;
+            var cmd = new MySqlCommand("SELECT idProduct FROM products WHERE name=@productName;", connection);
+            cmd.Parameters.AddWithValue("@productName", productName);
+            try
             {
-                Console.WriteLine("Order with idOrder=" + o.idOrder + " already exists! Skipped.");
-                continue;
-            }
-            int idUser = FindIdByNameUser(o.user, mySqlConnection);
-            if(idUser == -1)
-            {
-                InsertUserToDB(o.user, mySqlConnection);
-                idUser = FindIdByNameUser(o.user, mySqlConnection);
-            }
-            String sql = "INSERT INTO orders(idOrder,reg_date, sum, idUser) VALUES(" + o.idOrder + ",\'" +
-                o.reg_date.ToString("yyyy-MM-dd") + "\'," + o.sum.ToString().Replace(',','.') + "," + idUser + ");";
-            Console.WriteLine(sql);
-            MySqlCommand cmd = new MySqlCommand(sql, mySqlConnection);
-            cmd.ExecuteNonQuery();
-            foreach (var p in o.products)
-            {
-                int idProduct = FindIdByNameProduct(p.name!, mySqlConnection);
-                if(idProduct == -1)
+                MySqlDataReader rdr = cmd.ExecuteReader();
+                rdr.Read();
+                if (rdr.HasRows)
                 {
-                    InsertProductToDB(p, mySqlConnection);
-                    idProduct = FindIdByNameProduct(p.name!,mySqlConnection);
+                    string readValue = rdr[0].ToString() ?? "";
+                    int.TryParse(readValue, out idProduct);
                 }
-                InsertCartToDB(p, o.idOrder, idProduct, mySqlConnection);
-                // Reducing the quantity of products in the database
-                sql = "UPDATE products SET quantity = quantity - " + p.quantity + " WHERE idProduct=" + idProduct + " AND quantity>="+p.quantity+";";
-                cmd = new MySqlCommand(sql, mySqlConnection);
+                rdr.Close();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error: " + $"{ex.Message}");
+                Console.ReadKey();
+            }
+            return idProduct;
+        }
+
+
+        /// <summary>
+        /// Return -1 if doesn't exist
+        /// </summary>
+        /// <param name="Fio"></param>
+        /// <param name="mySqlConnection"></param>
+        /// <returns></returns>
+        public int FindIdByNameUser(User user)
+        {
+            int idUser = -1;
+            var cmd = new MySqlCommand("SELECT idUser FROM users WHERE last_name=@last_name AND first_name=@first_name AND middle_name=@middle_name;", connection);
+            cmd.Parameters.AddWithValue("@last_name", user.fioParse.last_name);
+            cmd.Parameters.AddWithValue("@first_name", user.fioParse.first_name);
+            cmd.Parameters.AddWithValue("@middle_name", user.fioParse.middle_name);
+            try
+            {
+                MySqlDataReader rdr = cmd.ExecuteReader();
+                rdr.Read();
+                if (rdr.HasRows)
+                {
+                    string readValue = rdr[0].ToString() ?? "";
+                    int.TryParse(readValue, out idUser);
+                }
+                rdr.Close();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error: " + $"{ex.Message}");
+                Console.ReadKey();
+            }
+            return idUser;
+        }
+        /// <summary>
+        /// Return true if order with same id already exists
+        /// </summary>
+        /// <param name="order"></param>
+        /// <param name="mySqlConnection"></param>
+        /// <returns></returns>
+        public bool IsOrderExistById(int idOrder)
+        {
+            bool isExist = false;
+            var cmd = new MySqlCommand("SELECT idOrder FROM orders WHERE idOrder=@idOrder;", connection);
+            cmd.Parameters.AddWithValue("@idOrder", idOrder);
+            try
+            {
+                MySqlDataReader rdr = cmd.ExecuteReader();
+                rdr.Read();
+                if (rdr.HasRows)
+                    isExist = true;
+                rdr.Close();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error: " + $"{ex.Message}");
+                Console.ReadKey();
+            }
+            return isExist;
+        }
+        private void InsertProductToDB(Product product)
+        {
+            var cmd = new MySqlCommand("INSERT INTO products (name, price, quantity) VALUES(@name,@price,@quantity);", connection);
+            cmd.Parameters.AddWithValue("@name", product.name);
+            cmd.Parameters.AddWithValue("@price", product.price);
+            cmd.Parameters.AddWithValue("@quantity", product.quantity);
+            try
+            {
+                Console.WriteLine("Adding [" + product.name+"]");
                 cmd.ExecuteNonQuery();
             }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error: " + $"{ex.Message}");
+                Console.ReadKey();
+            }
+        }
+        public void InsertUserToDB(User user)
+        {
+            var cmd = new MySqlCommand("INSERT INTO users (username, first_name, last_name, middle_name, email) VALUES(@username, @first_name, @last_name," +
+                "@middle_name,@email);", connection);
+            string rdUsername = RandomUsername();
+            cmd.Parameters.AddWithValue("@username", rdUsername);
+            cmd.Parameters.AddWithValue("@first_name", user.fioParse.first_name);
+            cmd.Parameters.AddWithValue("@last_name", user.fioParse.last_name);
+            cmd.Parameters.AddWithValue("@middle_name", user.fioParse.middle_name);
+            cmd.Parameters.AddWithValue("@email", user.email);
+            
+            Console.WriteLine("Adding ["+user.fio+"] with username = "+ rdUsername);
+            cmd.ExecuteNonQuery();
+        }
+        private void InsertCartToDB(Product product, int idOrder, int idProduct)
+        {
+            var cmd = new MySqlCommand("INSERT INTO cart (idOrder, idProduct, price, quantity) VALUES(@idOrder, @idProduct, @price, @quantity);", connection);
+            cmd.Parameters.AddWithValue("@idOrder", idOrder);
+            cmd.Parameters.AddWithValue("@idProduct", idProduct);
+            cmd.Parameters.AddWithValue("@price", product.price);
+            cmd.Parameters.AddWithValue("@quantity", product.quantity);
+            Console.WriteLine("Adding to cart [idOrder = "+idOrder+" ; idProduct = "+ idProduct+"]");
+            cmd.ExecuteNonQuery();
         }
 
-    }
-    /// <summary>
-    /// Return -1 if doesn't exist
-    /// </summary>
-    /// <param name="productName"></param>
-    /// <returns></returns>
-    private static int FindIdByNameProduct(string productName, MySqlConnection mySqlConnection)
-    {
-        int idProduct = -1;
-        string sql = "SELECT idProduct FROM products WHERE name=\'"+productName+"\';";
-        MySqlCommand cmd = new MySqlCommand(sql, mySqlConnection);
-        try
+        private void InsertOrderToDB(Order order, int idUser)
         {
-            MySqlDataReader rdr = cmd.ExecuteReader();
-            rdr.Read();
-            if(rdr.HasRows)
+            var cmd = new MySqlCommand("INSERT INTO orders(idOrder, reg_date, sum, idUser) VALUES(@idOrder, @reg_date, @sum, @idUser);", connection);
+            cmd.Parameters.AddWithValue("@idOrder", order.idOrder);
+            cmd.Parameters.AddWithValue("@reg_date", order.reg_date);
+            cmd.Parameters.AddWithValue("@sum", order.sum);
+            cmd.Parameters.AddWithValue("@idUser", idUser);
+            cmd.ExecuteNonQuery();
+            Console.WriteLine("Adding order #" + order.idOrder);
+        }
+
+        private void UpdateOrder(Order order, int idUser)
+        {
+            var cmd = new MySqlCommand("UPDATE orders SET sum = @sum, reg_date = @reg_date, idUser = @idUser WHERE idOrder = @idOrder;", connection);
+            cmd.Parameters.AddWithValue("@sum", order.sum);
+            cmd.Parameters.AddWithValue("@reg_date", order.reg_date);
+            cmd.Parameters.AddWithValue("@idUser", idUser);
+            cmd.Parameters.AddWithValue("@idOrder", order.idOrder);
+            Console.WriteLine("Updating order # " + order.idOrder);
+            cmd.ExecuteNonQuery();
+        }
+
+        private void DecreaseQuantityByIdProduct(int idProduct, int quantity)
+        {
+            var cmd = new MySqlCommand("UPDATE products SET quantity = quantity - @quantity WHERE idProduct=@idProduct AND quantity >= @quantity;", connection);
+            cmd.Parameters.AddWithValue("@quantity", quantity);
+            cmd.Parameters.AddWithValue("@idProduct", idProduct);
+            cmd.ExecuteNonQuery();
+        }
+
+        private void DeleteCartByIdOrder(int idOrder)
+        {
+            var cmdUpdate = new MySqlCommand("UPDATE products p INNER JOIN cart c ON " +
+                "c.idProduct = p.idProduct SET p.quantity = p.quantity + c.quantity WHERE c.idOrder = @idOrder;", connection);
+            cmdUpdate.Parameters.AddWithValue("@idOrder", idOrder);
+            var cmd = new MySqlCommand("DELETE FROM cart WHERE idOrder = @idOrder;", connection);
+            cmd.Parameters.AddWithValue("@idOrder", idOrder);
+            cmdUpdate.ExecuteNonQuery();
+            cmd.ExecuteNonQuery();            
+        }
+
+        public void AddOrUpdateOrders(Dictionary<Order, List<Product>> orders)
+        {
+            if(orders.Count == 0) { return; }
+
+            using (var trans = new TransactionScope(TransactionScopeOption.Required, new TransactionOptions() { IsolationLevel = System.Transactions.IsolationLevel.Serializable }))
             {
-                string readValue = rdr[0].ToString() ?? "";
-                int.TryParse(readValue, out idProduct);
+                connection = new MySqlConnection(connectionString);
+                connection.Open();
+                foreach (var o in orders)
+                {
+                    int idUser = FindIdByNameUser(o.Key.user);
+                    if (idUser == -1)
+                    {
+                        InsertUserToDB(o.Key.user);
+                        idUser = FindIdByNameUser(o.Key.user);
+                    }
+                    if (IsOrderExistById(o.Key.idOrder)) // Need update
+                    {
+                        DeleteCartByIdOrder(o.Key.idOrder);
+                        UpdateOrder(o.Key, idUser);
+                    }
+                    else
+                    {
+                        InsertOrderToDB(o.Key, idUser);
+                    }
+                    foreach (var p in o.Value)
+                    {
+                        int idProduct = FindIdByNameProduct(p.name!);
+                        if (idProduct == -1)
+                        {
+                            InsertProductToDB(p);
+                            idProduct = FindIdByNameProduct(p.name!);
+                        }
+                        InsertCartToDB(p, o.Key.idOrder, idProduct);
+                        DecreaseQuantityByIdProduct(idProduct, p.quantity);
+                    }
+                        
+                }
+                connection.Close();
+                trans.Complete();
             }
-            rdr.Close();
         }
-        catch (Exception ex)
+        public void Dispose()
         {
-            Console.WriteLine("Error: " + $"{ex.Message}");
-            Console.ReadKey();
+            connection.Dispose();
         }
-        return idProduct;
+    }
+
+    class XMLParser
+    {
+        string filename;
+        public XMLParser(string xmlFilename) 
+        {
+            filename = xmlFilename;
+        }
+
+        public Dictionary<Order, List<Product>> Parse()
+        {
+            Dictionary<Order, List<Product>> result = new Dictionary<Order, List<Product>>();
+            using (XmlReader reader = XmlReader.Create(filename))
+            {
+                reader.MoveToContent();
+                while (reader.Read())
+                {
+                    if (reader.NodeType == XmlNodeType.Element && reader.Name == "order")
+                    {
+                        int idOrder = -1;
+                        DateTime? reg_date = null;
+                        Decimal? sum = 0;
+                        while (reader.Read())
+                        {
+                            if (reader.NodeType == XmlNodeType.Element && reader.Name == "no")
+                                idOrder = reader.ReadElementContentAsInt();
+                            if (reader.NodeType == XmlNodeType.Element && reader.Name == "reg_date")
+                                reg_date = DateTime.Parse(reader.ReadElementContentAsString().Replace('.', '-'));
+                            if (reader.NodeType == XmlNodeType.Element && reader.Name == "sum")
+                                sum = reader.ReadElementContentAsDecimal();
+                            if (reader.NodeType == XmlNodeType.Element && reader.Name == "product")
+                                break;
+                        }
+                        if (idOrder == -1 || reg_date == null || sum == 0)
+                            throw new CorruptedXMLException("Bad order!");
+                        Order xmlOrder = new Order(idOrder, reg_date, sum);
+                        result.Add(xmlOrder, new List<Product>());
+                        do
+                        {
+                            if (reader.NodeType == XmlNodeType.Element && reader.Name == "product")
+                            {
+                                int _quantity = 0;
+                                string _name = "";
+                                decimal _price = 0;
+
+
+                                while (reader.Read())
+                                {
+                                    if (reader.NodeType == XmlNodeType.Element && reader.Name == "quantity")
+                                        _quantity = reader.ReadElementContentAsInt();
+                                    if (reader.NodeType == XmlNodeType.Element && reader.Name == "name")
+                                        _name = reader.ReadElementContentAsString();
+                                    if (reader.NodeType == XmlNodeType.Element && reader.Name == "price")
+                                        _price = reader.ReadElementContentAsDecimal();
+                                    if (reader.NodeType == XmlNodeType.EndElement && reader.Name == "product")
+                                    {
+                                        if (_quantity == 0 || _name.CompareTo("") == 0 || _price == 0)
+                                            throw new CorruptedXMLException("Bad product!");
+                                        result[xmlOrder].Add(new Product(xmlOrder.idOrder, _quantity, _price, _name));
+                                    }
+                                    if (reader.NodeType == XmlNodeType.Element && reader.Name == "product")
+                                    {
+                                        _quantity = 0;
+                                        _name = "";
+                                        _price = 0;
+                                    }
+                                    if (reader.NodeType == XmlNodeType.Element && reader.Name == "user")
+                                        break;
+                                }
+
+
+
+                            }
+                            if (reader.NodeType == XmlNodeType.Element && reader.Name == "user")
+                            {
+                                while (reader.Read())
+                                {
+                                    if (reader.NodeType == XmlNodeType.Element && reader.Name == "fio")
+                                        xmlOrder.user.fio = reader.ReadElementContentAsString();
+                                    if (reader.NodeType == XmlNodeType.Element && reader.Name == "email")
+                                        xmlOrder.user.email = reader.ReadElementContentAsString();
+                                    if (reader.NodeType == XmlNodeType.EndElement && reader.Name == "user")
+                                        break;
+                                }
+                            }
+
+                            if (reader.NodeType == XmlNodeType.EndElement && reader.Name == "order")
+                                break;
+                        }
+                        while (reader.Read());
+                    }
+                }
+            }
+            return result;
+            
+        }
     }
     
-
-    /// <summary>
-    /// Return -1 if doesn't exist
-    /// </summary>
-    /// <param name="Fio"></param>
-    /// <param name="mySqlConnection"></param>
-    /// <returns></returns>
-    private static int FindIdByNameUser(User user, MySqlConnection mySqlConnection)
-    {
-        int idUser = -1;
-        string sql = "SELECT idUser FROM users WHERE last_name=\'"+ user.fioParse.last_name+ "\' AND first_name=\'"+ 
-            user.fioParse.first_name+ "\' AND middle_name=\'"+user.fioParse.middle_name+"\';";
-        Console.WriteLine(sql);
-        MySqlCommand cmd = new MySqlCommand(sql, mySqlConnection);
-        try
-        {
-            MySqlDataReader rdr = cmd.ExecuteReader();
-            rdr.Read();
-            if(rdr.HasRows)
-            {
-                string readValue = rdr[0].ToString() ?? "";
-                int.TryParse(readValue, out idUser);
-            }
-            rdr.Close();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine("Error: " + $"{ex.Message}");
-            Console.ReadKey();
-        }
-        return idUser;
-    }
-    /// <summary>
-    /// Return true if order with same id already exists
-    /// </summary>
-    /// <param name="order"></param>
-    /// <param name="mySqlConnection"></param>
-    /// <returns></returns>
-    private static bool IsOrderExistById(int idOrder, MySqlConnection mySqlConnection)
-    {
-        bool isExist = false;
-        string sql = "SELECT idOrder FROM orders WHERE idOrder=" + idOrder + ";";
-        Console.WriteLine(sql);
-        MySqlCommand cmd = new MySqlCommand(sql, mySqlConnection);
-        try
-        {
-            MySqlDataReader rdr = cmd.ExecuteReader();
-            rdr.Read();
-            if (rdr.HasRows)
-                isExist = true;
-            rdr.Close();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine("Error: " + $"{ex.Message}");
-            Console.ReadKey();
-        }
-        return isExist;
-    }
-    private static void InsertProductToDB(Product product, MySqlConnection mySqlConnection)
-    {
-        string sql = "INSERT INTO products (name, price, quantity) VALUES(\'"+product.name+"\',"+product.price.ToString().Replace(',','.')+","+product.quantity+");";
-        MySqlCommand cmd = new MySqlCommand(sql, mySqlConnection);
-        try
-        {
-            Console.WriteLine(sql);
-            cmd.ExecuteNonQuery();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine("Error: " + $"{ex.Message}");
-            Console.ReadKey();
-        }
-    }
-    private static void InsertUserToDB(User user, MySqlConnection mySqlConnection)
-    {
-
-        string sql = "INSERT INTO users (username, first_name, last_name, middle_name, email) VALUES(\'" + RandomUsername() + "\',\'" +
-            user.fioParse.first_name + "\',\'" + user.fioParse.last_name + "\',\'" + user.fioParse.middle_name + "\',\'" + user.email + "\');";
-        MySqlCommand cmd = new MySqlCommand(sql, mySqlConnection);
-        try
-        {
-            Console.WriteLine(sql);
-            cmd.ExecuteNonQuery();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine("Error: " + $"{ex.Message}");
-            Console.ReadKey();
-        }
-    }
-    private static void InsertCartToDB(Product product, int idOrder, int idProduct, MySqlConnection mySqlConnection)
-    {
-        string sql = "INSERT INTO cart (idOrder, idProduct, price, quantity) VALUES(" + idOrder + "," +
-            idProduct + "," + product.price.ToString().Replace(',','.') + "," + product.quantity + ");";
-        MySqlCommand cmd = new MySqlCommand(sql, mySqlConnection);
-        try
-        {
-            Console.WriteLine(sql);
-            cmd.ExecuteNonQuery();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine("Error: " + $"{ex.Message}");
-            Console.ReadKey();
-        }
-    }
     public static string RandomUsername()
     {
         int length = 10;
@@ -452,7 +521,10 @@ class Program
                         mySqlConnection.Open();
                         if (parsedAction == 1)
                         {
-                            XmlToDatabase(mySqlConnection, filename);
+                            XMLParser parser = new XMLParser(filename);
+                            DB dB = new DB(dbConnection, mySqlConnection);
+                            var orders = parser.Parse();
+                            dB.AddOrUpdateOrders(orders);
                         }
                         else
                         {
