@@ -1,4 +1,5 @@
-﻿using MySql.Data.MySqlClient;
+﻿namespace SKRIN_InsertToDBFromXML.Console;
+using MySql.Data.MySqlClient;
 using System.Configuration;
 using System.Data.Common;
 using System.Data.SqlTypes;
@@ -10,9 +11,9 @@ using Mysqlx.Crud;
 using System;
 using System.Transactions;
 
-class Program
+public class Program
 {
-    const byte MAX_ACTIONS = 4; // 1..9
+    public const byte MAX_ACTIONS = 4; // 1..9
     const string WRONG_INPUT = "Wrong input!";
     static string? GetConnectionStringByName(string name)
     {
@@ -22,7 +23,7 @@ class Program
             returnValue = settings.ConnectionString;
         return returnValue;
     }
-    static bool IsCorrectDigit(string str)
+    public static bool IsCorrectDigit(string str)
     {
         foreach (char c in str)
         {
@@ -61,10 +62,11 @@ class Program
         public User user { get; set; }
 
     }
-    class User
+    public class User
     {
         private string _fio;
-        public string fio {
+        public string fio 
+        {
             get => _fio;
             set
             {
@@ -441,13 +443,12 @@ class Program
             
         }
     }
-    
+    public const int lengthOfRandomUsername = 10;
     public static string RandomUsername()
     {
-        int length = 10;
         Random random = new Random((int)(DateTime.Now.Ticks%int.MaxValue));
         const string chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-        return new string(Enumerable.Repeat(chars, length)
+        return new string(Enumerable.Repeat(chars, lengthOfRandomUsername)
             .Select(s => s[random.Next(s.Length)]).ToArray());
     }
 
